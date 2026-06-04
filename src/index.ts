@@ -1,4 +1,4 @@
-importimport { webhookCallback } from "grammy";
+import { webhookCallback } from "grammy";
 import { createBot } from "./bot";
 import { Env } from "./types";
 
