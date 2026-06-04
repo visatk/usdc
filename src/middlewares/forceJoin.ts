@@ -2,8 +2,8 @@ import { NextFunction } from "grammy";
 import { BotContext, CONFIG } from "../types";
 
 export async function forceJoinMiddleware(ctx: BotContext, next: NextFunction) {
-  // Allow 'check_membership' callback to bypass this middleware initially
-  if (ctx.callbackQuery?.data === "check_membership") {
+  // Allow these callbacks to bypass to prevent infinite loops during check
+  if (ctx.callbackQuery?.data === "check_membership" || ctx.callbackQuery?.data === "get_link") {
     return next();
   }
 
@@ -11,13 +11,12 @@ export async function forceJoinMiddleware(ctx: BotContext, next: NextFunction) {
   if (!userId) return;
 
   try {
-    // Check membership status in the configured channel
     const member = await ctx.api.getChatMember(CONFIG.CHANNEL_ID, userId);
     const isMember = ["member", "administrator", "creator"].includes(member.status);
 
     if (!isMember) {
       await ctx.reply(
-        "⚠️ *Access Denied!*\n\nYou must join our official channel to unlock the Referral Dashboard and earn your 45 USDC bonus.",
+        "⚠️ **Access Denied!**\n\nYou must join our official channel to unlock the Referral Lite Dashboard and claim your USDC rewards.",
         {
           parse_mode: "Markdown",
           reply_markup: {
@@ -28,14 +27,11 @@ export async function forceJoinMiddleware(ctx: BotContext, next: NextFunction) {
           }
         }
       );
-      return; // Short-circuit, do not proceed to command
+      return; 
     }
-
-    // User is a member, proceed to next handler
     await next();
   } catch (error) {
-    console.error("Force join check failed. Is bot admin in the channel?", error);
-    // If bot isn't admin yet, it will fail. Proceed to prevent locking users out during dev.
-    await next(); 
+    console.error("Force join check error:", error);
+    await next(); // Fallback for dev mode if bot is not admin
   }
 }
