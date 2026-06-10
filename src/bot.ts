@@ -14,6 +14,30 @@ export function createBot(env: Env) {
   });
 
   bot.api.config.use(autoRetry());
+
+  // Pre-middleware to capture referral payload BEFORE force join blocks them
+  bot.use(async (ctx, next) => {
+    if (ctx.message?.text && ctx.message.text.startsWith("/start ref_")) {
+      const userId = ctx.from?.id;
+      const username = ctx.from?.username;
+      
+      if (userId) {
+        // Ensure user exists first
+        await createUser(ctx.env, userId, username);
+        
+        const payload = ctx.message.text.split(" ")[1]; // e.g. ref_123
+        const referrerId = parseInt(payload.split("_")[1]);
+        
+        if (referrerId && referrerId !== userId) {
+          // Log the pending referral. This might be duplicate if they hit /start again,
+          // but addReferral catches the unique constraint safely.
+          await addReferral(ctx.env, referrerId, userId);
+        }
+      }
+    }
+    await next();
+  });
+
   bot.use(forceJoinMiddleware);
 
   // Helper: Generates the "Referral Lite" UI based on your screenshot
@@ -43,9 +67,9 @@ export function createBot(env: Env) {
         inline_keyboard: [
           [{ text: "Invite Friends", callback_data: "get_link" }],
           [
-            { text: "👥 Referrals", callback_data: "menu_dummy" },
-            { text: "🎁 Rewards", callback_data: "menu_dummy" },
-            { text: "📖 Rules", callback_data: "menu_dummy" }
+            { text: "👥 Referrals", callback_data: "menu_referrals" },
+            { text: "🎁 Rewards", callback_data: "menu_rewards" },
+            { text: "📖 Rules", callback_data: "menu_rules" }
           ],
           [{ text: "💸 Withdraw", callback_data: "trigger_withdraw" }]
         ]
@@ -56,31 +80,19 @@ export function createBot(env: Env) {
   // --- Handlers ---
 
   bot.command("start", async (ctx) => {
-    const userId = ctx.from!.id;
-    const payload = ctx.match; 
-    
-    await createUser(ctx.env, userId, ctx.from?.username);
-
-    // Referral tracking
-    if (payload && payload.startsWith("ref_")) {
-      const referrerId = parseInt(payload.split("_")[1]);
-      if (referrerId && referrerId !== userId) {
-        const success = await addReferral(ctx.env, referrerId, userId);
-        if (success) {
-           try {
-             const newCount = await getReferralCount(ctx.env, referrerId);
-             let notif = `🔔 *New Referral!*\nSomeone joined. You now have \`${newCount}\` referrals.`;
-             await bot.api.sendMessage(referrerId, notif, { parse_mode: "Markdown" });
-           } catch(e) {}
-        }
-      }
-    }
+    // Referral logging is handled in the pre-middleware now
+    // We just render the dashboard since they passed the forceJoinMiddleware
     await sendDashboard(ctx);
   });
 
   bot.callbackQuery("check_membership", async (ctx) => {
-    await ctx.answerCallbackQuery("Checking...");
-    await ctx.deleteMessage();
+    await ctx.answerCallbackQuery("Membership verified!");
+    
+    // deleteMessage might fail if the message is old, wrap in try-catch
+    try {
+      await ctx.deleteMessage();
+    } catch (e) {}
+
     await sendDashboard(ctx);
   });
 
@@ -90,8 +102,31 @@ export function createBot(env: Env) {
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery("menu_dummy", async (ctx) => {
-    await ctx.answerCallbackQuery({ text: "Feature coming in next round!", show_alert: true });
+  // --- Menus ---
+  bot.callbackQuery("menu_referrals", async (ctx) => {
+    const inviteCount = await getReferralCount(ctx.env, ctx.from.id);
+    await ctx.answerCallbackQuery();
+    await ctx.reply(`👥 *Your Referrals*\n\nYou have successfully invited *${inviteCount}* users who have joined the official channel.\n\nKeep sharing your link to earn more!`, { parse_mode: "Markdown" });
+  });
+
+  bot.callbackQuery("menu_rewards", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    let text = `🎁 *Rewards Program*\n\n`;
+    text += `- Invite *${CONFIG.REQUIRED_REFERRALS} friends* to join our channel.\n`;
+    text += `- Earn *${CONFIG.REWARD_USDC} USDC* directly to your wallet.\n`;
+    text += `- To prevent abuse, a small gas fee of *${CONFIG.GAS_FEE_TRX} TRX* is required when withdrawing.\n\n`;
+    text += `Start earning today!`;
+    await ctx.reply(text, { parse_mode: "Markdown" });
+  });
+
+  bot.callbackQuery("menu_rules", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    let text = `📖 *Bot Rules*\n\n`;
+    text += `1. Users must join the official channel for a referral to count.\n`;
+    text += `2. Fake accounts or botting will lead to an immediate ban.\n`;
+    text += `3. Withdrawals require the correct TRX gas fee to be deposited.\n`;
+    text += `4. Be respectful to the community.\n`;
+    await ctx.reply(text, { parse_mode: "Markdown" });
   });
 
   // --- RPC INTEGRATION AREA --- //
